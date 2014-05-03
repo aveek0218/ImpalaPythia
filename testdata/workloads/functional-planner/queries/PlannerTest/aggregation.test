@@ -1,0 +1,93 @@
+# basic aggregation
+select count(*), count(tinyint_col), min(tinyint_col), max(tinyint_col), sum(tinyint_col),
+avg(tinyint_col)
+from functional.alltypesagg
+---- PLAN
+01:AGGREGATE [FINALIZE]
+|  output: COUNT(*), COUNT(tinyint_col), MIN(tinyint_col), MAX(tinyint_col), SUM(tinyint_col)
+|
+00:SCAN HDFS [functional.alltypesagg]
+   partitions=10/10 size=743.67KB
+---- DISTRIBUTEDPLAN
+03:AGGREGATE [MERGE FINALIZE]
+|  output: SUM(COUNT(*)), SUM(COUNT(tinyint_col)), MIN(MIN(tinyint_col)), MAX(MAX(tinyint_col)), SUM(SUM(tinyint_col))
+|
+02:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+01:AGGREGATE
+|  output: COUNT(*), COUNT(tinyint_col), MIN(tinyint_col), MAX(tinyint_col), SUM(tinyint_col)
+|
+00:SCAN HDFS [functional.alltypesagg]
+   partitions=10/10 size=743.67KB
+====
+# with grouping
+select tinyint_col, bigint_col, count(*), min(tinyint_col), max(tinyint_col), sum(tinyint_col),
+avg(tinyint_col)
+from functional.alltypesagg
+group by 2, 1
+---- PLAN
+01:AGGREGATE [FINALIZE]
+|  output: COUNT(*), MIN(tinyint_col), MAX(tinyint_col), SUM(tinyint_col), COUNT(tinyint_col)
+|  group by: bigint_col, tinyint_col
+|
+00:SCAN HDFS [functional.alltypesagg]
+   partitions=10/10 size=743.67KB
+---- SCANRANGELOCATIONS
+NODE 0:
+  HDFS SPLIT hdfs://localhost:20500/test-warehouse/alltypesagg/year=2010/month=1/day=1/100101.txt 0:75153
+  HDFS SPLIT hdfs://localhost:20500/test-warehouse/alltypesagg/year=2010/month=1/day=10/100110.txt 0:76263
+  HDFS SPLIT hdfs://localhost:20500/test-warehouse/alltypesagg/year=2010/month=1/day=2/100102.txt 0:76263
+  HDFS SPLIT hdfs://localhost:20500/test-warehouse/alltypesagg/year=2010/month=1/day=3/100103.txt 0:76263
+  HDFS SPLIT hdfs://localhost:20500/test-warehouse/alltypesagg/year=2010/month=1/day=4/100104.txt 0:76263
+  HDFS SPLIT hdfs://localhost:20500/test-warehouse/alltypesagg/year=2010/month=1/day=5/100105.txt 0:76263
+  HDFS SPLIT hdfs://localhost:20500/test-warehouse/alltypesagg/year=2010/month=1/day=6/100106.txt 0:76263
+  HDFS SPLIT hdfs://localhost:20500/test-warehouse/alltypesagg/year=2010/month=1/day=7/100107.txt 0:76263
+  HDFS SPLIT hdfs://localhost:20500/test-warehouse/alltypesagg/year=2010/month=1/day=8/100108.txt 0:76263
+  HDFS SPLIT hdfs://localhost:20500/test-warehouse/alltypesagg/year=2010/month=1/day=9/100109.txt 0:76263
+---- DISTRIBUTEDPLAN
+04:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+03:AGGREGATE [MERGE FINALIZE]
+|  output: SUM(COUNT(*)), MIN(MIN(tinyint_col)), MAX(MAX(tinyint_col)), SUM(SUM(tinyint_col)), SUM(COUNT(tinyint_col))
+|  group by: bigint_col, tinyint_col
+|
+02:EXCHANGE [PARTITION=HASH(bigint_col,tinyint_col)]
+|
+01:AGGREGATE
+|  output: COUNT(*), MIN(tinyint_col), MAX(tinyint_col), SUM(tinyint_col), COUNT(tinyint_col)
+|  group by: bigint_col, tinyint_col
+|
+00:SCAN HDFS [functional.alltypesagg]
+   partitions=10/10 size=743.67KB
+====
+# avg substitution
+select avg(id)
+from functional.testtbl
+having count(id) > 0
+order by avg(zip) limit 10
+---- PLAN
+02:TOP-N [LIMIT=10]
+|  order by: SUM(zip) / COUNT(zip) ASC
+|
+01:AGGREGATE [FINALIZE]
+|  output: SUM(id), COUNT(id), SUM(zip), COUNT(zip)
+|  having: COUNT(id) > 0
+|
+00:SCAN HDFS [functional.testtbl]
+   partitions=1/1 size=0B
+---- DISTRIBUTEDPLAN
+02:TOP-N [LIMIT=10]
+|  order by: SUM(zip) / COUNT(zip) ASC
+|
+04:AGGREGATE [MERGE FINALIZE]
+|  output: SUM(SUM(id)), SUM(COUNT(id)), SUM(SUM(zip)), SUM(COUNT(zip))
+|  having: COUNT(id) > 0
+|
+03:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+01:AGGREGATE
+|  output: SUM(id), COUNT(id), SUM(zip), COUNT(zip)
+|
+00:SCAN HDFS [functional.testtbl]
+   partitions=1/1 size=0B
+====

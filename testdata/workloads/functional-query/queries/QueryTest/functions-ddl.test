@@ -1,0 +1,215 @@
+====
+---- QUERY
+# Drop the dummy udfs this test uses.
+drop function if exists default.fn();
+drop function if exists function_ddl_test.fn();
+drop function if exists function_ddl_test.fn(int);
+drop function if exists function_ddl_test.fn(int, string);
+drop function if exists function_ddl_test.fn(string, int);
+drop function if exists function_ddl_test.fn2(int);
+drop function if exists function_ddl_test.fn2(int, string);
+drop function if exists function_ddl_test.fn_var_arg(int...);
+drop function if exists function_ddl_test.agg_fn(int);
+drop function if exists function_ddl_test.agg_fn(int, string);
+====
+---- QUERY
+# Verify all the test functions are removed
+show functions in function_ddl_test
+---- RESULTS
+---- TYPES
+STRING
+====
+---- QUERY
+# Verify all the test functions are removed
+show aggregate functions in function_ddl_test
+---- RESULTS
+---- TYPES
+STRING
+====
+---- QUERY
+# Add them and test function overloading and scoping.
+create function default.fn() RETURNS int
+LOCATION '/test-warehouse/libTestUdfs.so' SYMBOL='Fn'
+====
+---- QUERY
+create function function_ddl_test.fn() RETURNS int
+LOCATION '/test-warehouse/libTestUdfs.so' SYMBOL='Fn'
+====
+---- QUERY
+create function function_ddl_test.fn(int) RETURNS double
+LOCATION '/test-warehouse/libTestUdfs.so' SYMBOL='Fn'
+====
+---- QUERY
+create function function_ddl_test.fn(int, string) RETURNS int
+LOCATION '/test-warehouse/libTestUdfs.so' SYMBOL='Fn'
+====
+---- QUERY
+create function function_ddl_test.fn(string, int) RETURNS int
+LOCATION '/test-warehouse/libTestUdfs.so' SYMBOL='Fn'
+====
+---- QUERY
+create function function_ddl_test.fn2(int) RETURNS int
+LOCATION '/test-warehouse/libTestUdfs.so' SYMBOL='Fn2'
+====
+---- QUERY
+create function function_ddl_test.fn2(int, string) RETURNS int
+LOCATION '/test-warehouse/libTestUdfs.so' SYMBOL='Fn2'
+====
+---- QUERY
+create function function_ddl_test.fn_var_arg(int...) RETURNS int
+LOCATION '/test-warehouse/libTestUdfs.so' SYMBOL='VarSum'
+====
+---- QUERY
+create aggregate function function_ddl_test.agg_fn(int) RETURNS bigint
+LOCATION '/test-warehouse/libudasample.so' UPDATE_FN='CountUpdate'
+====
+---- QUERY
+create aggregate function function_ddl_test.agg_fn(int, string) RETURNS int
+LOCATION '/test-warehouse/libTestUdas.so' UPDATE_FN='TwoArgUpdate'
+====
+---- QUERY
+show functions in default
+---- RESULTS
+'fn()'
+---- TYPES
+STRING
+====
+---- QUERY
+show functions in function_ddl_test
+---- RESULTS
+'fn()'
+'fn(INT)'
+'fn(INT, STRING)'
+'fn(STRING, INT)'
+'fn2(INT)'
+'fn2(INT, STRING)'
+'fn_var_arg(INT...)'
+---- TYPES
+STRING
+====
+---- QUERY
+show aggregate functions in function_ddl_test
+---- RESULTS
+'agg_fn(INT)'
+'agg_fn(INT, STRING)'
+---- TYPES
+STRING
+====
+---- QUERY
+drop function function_ddl_test.fn2(int, string)
+====
+---- QUERY
+show functions
+---- RESULTS
+'fn()'
+'fn(INT)'
+'fn(INT, STRING)'
+'fn(STRING, INT)'
+'fn2(INT)'
+'fn_var_arg(INT...)'
+---- TYPES
+STRING
+====
+---- QUERY
+drop function if exists function_ddl_test.fn2(int, string)
+====
+---- QUERY
+show functions in function_ddl_test
+---- RESULTS
+'fn()'
+'fn(INT)'
+'fn(INT, STRING)'
+'fn(STRING, INT)'
+'fn2(INT)'
+'fn_var_arg(INT...)'
+---- TYPES
+STRING
+====
+---- QUERY
+show functions in default;
+---- RESULTS
+'fn()'
+---- TYPES
+STRING
+====
+---- QUERY
+drop function default.fn()
+====
+---- QUERY
+show functions in default;
+---- RESULTS
+---- TYPES
+STRING
+====
+---- QUERY
+show functions in function_ddl_test;
+---- RESULTS
+'fn()'
+'fn(INT)'
+'fn(INT, STRING)'
+'fn(STRING, INT)'
+'fn2(INT)'
+'fn_var_arg(INT...)'
+---- TYPES
+STRING
+====
+---- QUERY
+drop function fn()
+====
+---- QUERY
+show functions;
+---- RESULTS
+'fn(INT)'
+'fn(INT, STRING)'
+'fn(STRING, INT)'
+'fn2(INT)'
+'fn_var_arg(INT...)'
+---- TYPES
+STRING
+====
+---- QUERY
+drop function fn_var_arg(INT...)
+====
+---- QUERY
+show functions;
+---- RESULTS
+'fn(INT)'
+'fn(INT, STRING)'
+'fn(STRING, INT)'
+'fn2(INT)'
+---- TYPES
+STRING
+====
+---- QUERY
+drop function agg_fn(int)
+====
+---- QUERY
+show aggregate functions
+---- RESULTS
+'agg_fn(INT, STRING)'
+---- TYPES
+STRING
+====
+---- QUERY
+# Call invalidate metadata and make sure the functions are still there
+invalidate metadata
+---- RESULTS
+---- TYPES
+====
+---- QUERY
+show functions
+---- RESULTS
+'fn(INT)'
+'fn(INT, STRING)'
+'fn(STRING, INT)'
+'fn2(INT)'
+---- TYPES
+STRING
+====
+---- QUERY
+show aggregate functions
+---- RESULTS
+'agg_fn(INT, STRING)'
+---- TYPES
+STRING
+====

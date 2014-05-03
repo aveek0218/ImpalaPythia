@@ -1,0 +1,429 @@
+====
+---- QUERY
+# It should show up now
+show databases like 'ddl_test_db'
+---- RESULTS
+'ddl_test_db'
+---- TYPES
+STRING
+====
+---- QUERY
+# Make sure creating a database with the same name doesn't throw an error when
+# IF NOT EXISTS is specified.
+create database if not exists ddl_test_db
+---- RESULTS
+====
+---- QUERY
+show tables in ddl_test_db
+---- RESULTS
+====
+---- QUERY
+create table ddl_test_db.testtbl(i int, s string COMMENT 'String col') STORED AS TEXTFILE
+---- RESULTS
+====
+---- QUERY
+# Make sure creating a table with the same name doesn't throw an error when
+# IF NOT EXISTS is specified.
+create table if not exists ddl_test_db.testtbl(i int, s string)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY '\t'
+ESCAPED BY '\\'
+LINES TERMINATED BY '\n'
+STORED AS TEXTFILE
+---- RESULTS
+====
+---- QUERY
+show tables in ddl_test_db
+---- RESULTS
+'testtbl'
+---- TYPES
+STRING
+====
+---- QUERY
+describe ddl_test_db.testtbl
+---- RESULTS
+'i','int',''
+'s','string','String col'
+---- TYPES
+STRING, STRING, STRING
+====
+---- QUERY
+insert overwrite table ddl_test_db.testtbl SELECT 1, 'Hi'
+from functional.alltypes limit 10
+---- RESULTS
+: 10
+====
+---- QUERY
+select * from ddl_test_db.testtbl
+---- RESULTS
+1,'Hi'
+1,'Hi'
+1,'Hi'
+1,'Hi'
+1,'Hi'
+1,'Hi'
+1,'Hi'
+1,'Hi'
+1,'Hi'
+1,'Hi'
+---- TYPES
+INT, STRING
+====
+---- QUERY
+create table ddl_test_db.testtbl_part(i int, s string) PARTITIONED BY (id int comment 'C')
+---- RESULTS
+====
+---- QUERY
+# Partition columns are displayed as part of DESCRIBE <table>
+describe ddl_test_db.testtbl_part
+---- RESULTS
+'i','int',''
+'s','string',''
+'id','int','C'
+---- TYPES
+STRING, STRING, STRING
+====
+---- QUERY
+insert overwrite table ddl_test_db.testtbl_part partition(id=1)
+select 10, 'Ten' from functional.alltypes limit 1
+---- RESULTS
+id=1/: 1
+====
+---- QUERY
+insert overwrite table ddl_test_db.testtbl_part partition(id=2)
+select 20, 'Twenty' from functional.alltypes limit 2
+---- RESULTS
+id=2/: 2
+====
+---- QUERY
+select * from ddl_test_db.testtbl_part
+---- RESULTS
+10,'Ten',1
+20,'Twenty',2
+20,'Twenty',2
+---- TYPES
+INT, STRING, INT
+====
+---- QUERY
+select * from ddl_test_db.testtbl_part where id = 1
+---- RESULTS
+10,'Ten',1
+---- TYPES
+INT, STRING, INT
+====
+---- QUERY
+use ddl_test_db
+---- RESULTS
+====
+---- QUERY
+show tables
+---- RESULTS
+'testtbl'
+'testtbl_part'
+---- TYPES
+STRING
+====
+---- QUERY
+# Make sure we create the table in the proper database after a "use"
+create table testtbl2(f float, d double) ROW FORMAT DELIMITED FIELDS TERMINATED BY '|'
+---- RESULTS
+====
+---- QUERY
+show tables
+---- RESULTS
+'testtbl'
+'testtbl2'
+'testtbl_part'
+---- TYPES
+STRING
+====
+---- QUERY
+drop table testtbl2
+---- RESULTS
+====
+---- QUERY
+show tables
+---- RESULTS
+'testtbl'
+'testtbl_part'
+---- TYPES
+STRING
+====
+---- QUERY
+# CREATE TABLE LIKE on partitioned table
+create table alltypes_test like functional_seq_snap.alltypes
+stored as parquet
+---- RESULTS
+====
+---- QUERY
+# Make sure no data exists for this table
+select count(*) from alltypes_test
+---- RESULTS
+0
+---- TYPES
+BIGINT
+====
+---- QUERY
+# Should be able to insert into this table
+insert overwrite table alltypes_test
+partition (year=2009, month=4)
+select id, bool_col, tinyint_col, smallint_col, int_col, bigint_col,
+float_col, double_col, date_string_col, string_col, timestamp_col
+from functional.alltypes where year=2009 and month=4
+---- RESULTS
+year=2009/month=4/: 300
+====
+---- QUERY
+# Make sure we can read the new data.
+select count(*) from alltypes_test
+---- RESULTS
+300
+---- TYPES
+BIGINT
+====
+---- QUERY
+# Show this was actually a different file format (parquet) by trying to
+# change the format to textfile and reading the results.
+alter table alltypes_test partition (year=2009, month=4)
+set fileformat textfile
+---- RESULTS
+====
+---- QUERY
+select count(*) from alltypes_test
+---- RESULTS
+124
+---- TYPES
+BIGINT
+====
+---- QUERY
+# This should copy the file format from the source table (rc)
+create external table jointbl_like like functional_rc_gzip.jointbl
+location '/test-warehouse/jointbl_rc_gzip'
+---- RESULTS
+====
+---- QUERY
+# should get some results back
+select * from jointbl_like order by test_id limit 3
+---- RESULTS
+1001,'Name1',94611,5000
+1002,'Name2',94611,5000
+1003,'Name3',94611,5000
+---- TYPES
+BIGINT, STRING, INT, INT
+====
+---- QUERY
+# CREATE TABLE LIKE on unpartitioned table.
+create table testtbl_like like testtbl
+---- RESULTS
+====
+---- QUERY
+# Make sure the new table can be queried and no data exists for this table.
+select count(*) from testtbl_like
+---- RESULTS
+0
+---- TYPES
+BIGINT
+====
+---- QUERY
+# No error is thrown when IF NOT EXISTS is specified and the table already exists.
+create table if not exists testtbl_like like testtbl
+---- RESULTS
+====
+---- QUERY
+# IF NOT EXISTS also applies when the src table is the same as the new table.
+create table if not exists testtbl_like like testtbl_like
+---- RESULTS
+====
+---- QUERY
+insert overwrite table testtbl_like
+select * from testtbl limit 5
+---- RESULTS
+: 5
+====
+---- QUERY
+# Make sure we can read the data.
+select * from testtbl_like
+---- RESULTS
+1,'Hi'
+1,'Hi'
+1,'Hi'
+1,'Hi'
+1,'Hi'
+---- TYPES
+INT, STRING
+====
+---- QUERY
+# Ensure that a table can be created using CTAS
+create table ctas_join stored as parquet as
+select j.*, a.int_col, 1*2
+from functional.jointbl j join functional_seq_snap.alltypes a
+  on (j.alltypes_id=a.id)
+---- RESULTS
+'Inserted 12 row(s)'
+---- TYPES
+STRING
+====
+---- QUERY
+describe ctas_join
+---- RESULTS
+'test_id','bigint',''
+'test_name','string',''
+'test_zip','int',''
+'alltypes_id','int',''
+'int_col','int',''
+'_c2','smallint',''
+---- TYPES
+STRING, STRING, STRING
+====
+---- QUERY
+select * from ctas_join
+---- RESULTS
+1001,'Name1',94611,5000,0,2
+1002,'Name2',94611,5000,0,2
+1003,'Name3',94611,5000,0,2
+1004,'Name4',94611,5000,0,2
+1005,'Name5',94611,5000,0,2
+1106,'Name6',94612,5000,0,2
+1006,'Name16',94612,5000,0,2
+1006,'Name6',94616,5000,0,2
+1106,'Name16',94612,5000,0,2
+1106,'Name6',94616,5000,0,2
+1006,'Name16',94616,5000,0,2
+1106,'Name16',94616,5000,0,2
+---- TYPES
+BIGINT, STRING, INT, INT, INT, SMALLINT
+====
+---- QUERY
+# Since the table already exists, the second CTAS should be a no-op
+create table if not exists ctas_join stored as parquet as
+select j.*, a.int_col, 1*2
+from functional.jointbl j join functional_seq_snap.alltypes a
+  on (j.alltypes_id=a.id) limit 1
+---- RESULTS
+'Inserted 0 row(s)'
+---- TYPES
+STRING
+====
+---- QUERY
+select * from ctas_join
+---- RESULTS
+1001,'Name1',94611,5000,0,2
+1002,'Name2',94611,5000,0,2
+1003,'Name3',94611,5000,0,2
+1004,'Name4',94611,5000,0,2
+1005,'Name5',94611,5000,0,2
+1106,'Name6',94612,5000,0,2
+1006,'Name16',94612,5000,0,2
+1006,'Name6',94616,5000,0,2
+1106,'Name16',94612,5000,0,2
+1106,'Name6',94616,5000,0,2
+1006,'Name16',94616,5000,0,2
+1106,'Name16',94616,5000,0,2
+---- TYPES
+BIGINT, STRING, INT, INT, INT, SMALLINT
+====
+---- QUERY
+# Validate CTAS with LIMIT 0
+create table if not exists ctas_join_limit0 stored as textfile as
+select * from functional.jointbl limit 0
+---- RESULTS
+'Inserted 0 row(s)'
+---- TYPES
+STRING
+====
+---- QUERY
+describe ctas_join_limit0
+---- RESULTS
+'test_id','bigint',''
+'test_name','string',''
+'test_zip','int',''
+'alltypes_id','int',''
+---- TYPES
+STRING, STRING, STRING
+====
+---- QUERY
+select * from ctas_join_limit0
+---- RESULTS
+---- TYPES
+BIGINT, STRING, INT, INT
+====
+---- QUERY
+# Validate CTAS with LIMIT 0
+create table if not exists ctas_join_limit0 stored as textfile as
+select * from functional.jointbl limit 0
+---- RESULTS
+'Inserted 0 row(s)'
+---- TYPES
+STRING
+====
+---- QUERY
+select * from ctas_join_limit0
+---- RESULTS
+---- TYPES
+BIGINT, STRING, INT, INT
+====
+---- QUERY
+create table if not exists ctas_join_limit0 stored as textfile as
+select * from functional.jointbl limit 4
+---- RESULTS
+'Inserted 0 row(s)'
+---- TYPES
+STRING
+====
+---- QUERY
+select * from ctas_join_limit0
+---- RESULTS
+---- TYPES
+BIGINT, STRING, INT, INT
+====
+---- QUERY
+drop table ctas_join
+---- RESULTS
+====
+---- QUERY
+drop table ctas_join_limit0
+---- RESULTS
+====
+---- QUERY
+drop table testtbl
+---- RESULTS
+====
+---- QUERY
+drop table testtbl_part
+---- RESULTS
+====
+---- QUERY
+drop table alltypes_test
+---- RESULTS
+====
+---- QUERY
+drop table jointbl_like
+---- RESULTS
+====
+---- QUERY
+drop table testtbl_like
+---- RESULTS
+====
+---- QUERY
+show tables
+---- RESULTS
+---- TYPES
+STRING
+====
+---- QUERY
+drop table if exists non_existent_db.tbl
+---- RESULTS
+====
+---- QUERY
+# Need to switch databases before dropping
+use default;
+drop database ddl_test_db
+---- RESULTS
+====
+---- QUERY
+# Should be gone now
+show databases like 'ddl_test_db'
+---- RESULTS
+---- TYPES
+STRING
+====

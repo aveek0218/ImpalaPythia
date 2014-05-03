@@ -1,0 +1,62 @@
+====
+---- QUERY: TPCDS-Q55
+SELECT
+  i_brand_id,
+  i_brand,
+  SUM(ss_ext_sales_price) AS ext_price
+FROM store_sales ss
+JOIN date_dim d
+  ON (ss.ss_sold_date_sk = d.d_date_sk)
+JOIN item i
+  ON (ss.ss_item_sk = i.i_item_sk)
+WHERE
+  i_manager_id = 36
+  AND d_moy = 12
+  AND d_year = 2001
+GROUP BY
+  i_brand,
+  i_brand_id
+ORDER BY
+  ext_price DESC,
+  i_brand_id
+LIMIT 100;
+---- RESULTS
+5004002,'edu packscholar #2',8314.0400390625
+8008010,'namelessnameless #10',7463.639999389648
+2003001,'edu packimporto #2',6744.029918670654
+6015006,'scholarbrand #6',6336.97998046875
+7014001,'edu packcorp #4',5898.019805908203
+3003001,'scholarnameless #6',4715.47998046875
+3004001,'exportibrand #4',4593.27001953125
+1001001,'importoamalgamalg #7',3485.910034179688
+3002001,'exportiexporti #2',2922.839965820312
+10007011,'brandunivamalg #11',2794.450012207031
+4003002,'exportiedu pack #2',2630.39990234375
+7014010,'edu packnameless #10',2563.400054931641
+9015011,'importoscholar #2',2391.89990234375
+5002001,'exportischolar #2',2197.919921875
+2004001,'importoimporto #2',2025.349945068359
+2003001,'maxinameless #6',1924.800048828125
+10002007,'maxiunivamalg #8',1876.5
+9003008,'exportimaxi #8',1457.93994140625
+8013002,'exportimaxi #2',1390.739990234375
+2004002,'edu packimporto #2',1234.619995117188
+4004002,'edu packedu pack #2',1060.280029296875
+4001002,'amalgedu pack #2',951
+3003002,'exportiexporti #2',910.1599769592285
+6001002,'amalgcorp #2',834.0800170898438
+6016001,'importoamalg #2',823
+2002002,'importoimporto #2',754.9199829101562
+9006004,'corpmaxi #4',627.6599731445312
+3004002,'edu packexporti #2',505.260009765625
+1004001,'edu packamalg #2',490.2000122070312
+10004013,'edu packunivamalg #13',467.1000061035156
+10006004,'importonameless #10',279.1099853515625
+2003002,'exportiimporto #2',250.2400054931641
+7004002,'edu packbrand #2',210.5
+8015007,'exportiamalg #2',163.0500030517578
+10011016,'amalgamalgamalg #16',10.85000038146973
+5001002,'amalgscholar #2',8.819999694824219
+---- TYPES
+INT, STRING, DOUBLE
+====

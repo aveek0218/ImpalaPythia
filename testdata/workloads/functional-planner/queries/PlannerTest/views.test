@@ -1,0 +1,390 @@
+# Basic test with a view.
+select int_col, string_col from functional.alltypes_view
+---- PLAN
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=1.40MB
+---- DISTRIBUTEDPLAN
+01:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=1.40MB
+====
+# Basic test with a complex view.
+select * from functional.complex_view
+---- PLAN
+04:TOP-N [LIMIT=100]
+|  order by: b.string_col ASC
+|
+03:AGGREGATE [FINALIZE]
+|  output: COUNT(a.bigint_col)
+|  group by: b.string_col
+|  having: COUNT(a.bigint_col) > 1
+|
+02:HASH JOIN [INNER JOIN]
+|  hash predicates: a.id = b.id
+|
+|--01:SCAN HDFS [functional.alltypestiny b]
+|     partitions=4/4 size=460B compact
+|
+00:SCAN HDFS [functional.alltypesagg a]
+   partitions=10/10 size=743.67KB
+   predicates: a.bigint_col < 50
+---- DISTRIBUTEDPLAN
+09:TOP-N [LIMIT=100]
+|  order by: b.string_col ASC
+|
+08:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+04:TOP-N [LIMIT=100]
+|  order by: b.string_col ASC
+|
+07:AGGREGATE [MERGE FINALIZE]
+|  output: SUM(COUNT(a.bigint_col))
+|  group by: b.string_col
+|  having: COUNT(a.bigint_col) > 1
+|
+06:EXCHANGE [PARTITION=HASH(b.string_col)]
+|
+03:AGGREGATE
+|  output: COUNT(a.bigint_col)
+|  group by: b.string_col
+|
+02:HASH JOIN [INNER JOIN, BROADCAST]
+|  hash predicates: a.id = b.id
+|
+|--05:EXCHANGE [BROADCAST]
+|  |
+|  01:SCAN HDFS [functional.alltypestiny b]
+|     partitions=4/4 size=460B
+|
+00:SCAN HDFS [functional.alltypesagg a]
+   partitions=10/10 size=743.67KB
+   predicates: a.bigint_col < 50
+====
+# Basic test with a view on a view
+select int_col, string_col from functional.view_view
+---- PLAN
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=1.87MB
+---- DISTRIBUTEDPLAN
+01:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=1.87MB
+====
+# view used in a union.
+select * from functional.alltypes_view union all
+select * from functional.alltypes_view where id < 10
+---- PLAN
+00:MERGE
+|
+|--02:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=1.40MB
+|     predicates: functional.alltypes.id < 10
+|
+01:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=1.40MB
+---- DISTRIBUTEDPLAN
+03:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+|--05:MERGE
+|  |
+|  02:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=1.40MB
+|     predicates: functional.alltypes.id < 10
+|
+04:MERGE
+|
+01:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=1.40MB
+====
+# view used in an inline view.
+select t.id from (select id from functional.alltypes_view) t
+where t.id < 10
+---- PLAN
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=1.87MB
+   predicates: functional.alltypes.id < 10
+---- DISTRIBUTEDPLAN
+01:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=1.87MB
+   predicates: functional.alltypes.id < 10
+====
+# Multiple views used in a join.
+select * from functional.alltypes_view t1, functional.alltypes_view_sub t2,
+functional.complex_view t3 where t1.id = t2.x and t2.x = t3.abc
+---- PLAN
+08:HASH JOIN [INNER JOIN]
+|  hash predicates: functional.alltypes.id = int_col
+|
+|--01:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=1.40MB compact
+|
+07:HASH JOIN [INNER JOIN]
+|  hash predicates: functional.alltypes.id = COUNT(a.bigint_col)
+|
+|--06:TOP-N [LIMIT=100]
+|  |  order by: b.string_col ASC
+|  |
+|  05:AGGREGATE [FINALIZE]
+|  |  output: COUNT(a.bigint_col)
+|  |  group by: b.string_col
+|  |  having: COUNT(a.bigint_col) > 1
+|  |
+|  04:HASH JOIN [INNER JOIN]
+|  |  hash predicates: a.id = b.id
+|  |
+|  |--03:SCAN HDFS [functional.alltypestiny b]
+|  |     partitions=4/4 size=460B compact
+|  |
+|  02:SCAN HDFS [functional.alltypesagg a]
+|     partitions=10/10 size=743.67KB
+|     predicates: a.bigint_col < 50
+|
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=956.90KB
+---- DISTRIBUTEDPLAN
+16:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+08:HASH JOIN [INNER JOIN, BROADCAST]
+|  hash predicates: functional.alltypes.id = int_col
+|
+|--15:EXCHANGE [BROADCAST]
+|  |
+|  01:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=1.40MB
+|
+07:HASH JOIN [INNER JOIN, BROADCAST]
+|  hash predicates: functional.alltypes.id = COUNT(a.bigint_col)
+|
+|--14:EXCHANGE [BROADCAST]
+|  |  limit: 100
+|  |
+|  13:TOP-N [LIMIT=100]
+|  |  order by: b.string_col ASC
+|  |
+|  12:EXCHANGE [PARTITION=UNPARTITIONED]
+|  |
+|  06:TOP-N [LIMIT=100]
+|  |  order by: b.string_col ASC
+|  |
+|  11:AGGREGATE [MERGE FINALIZE]
+|  |  output: SUM(COUNT(a.bigint_col))
+|  |  group by: b.string_col
+|  |  having: COUNT(a.bigint_col) > 1
+|  |
+|  10:EXCHANGE [PARTITION=HASH(b.string_col)]
+|  |
+|  05:AGGREGATE
+|  |  output: COUNT(a.bigint_col)
+|  |  group by: b.string_col
+|  |
+|  04:HASH JOIN [INNER JOIN, BROADCAST]
+|  |  hash predicates: a.id = b.id
+|  |
+|  |--09:EXCHANGE [BROADCAST]
+|  |  |
+|  |  03:SCAN HDFS [functional.alltypestiny b]
+|  |     partitions=4/4 size=460B
+|  |
+|  02:SCAN HDFS [functional.alltypesagg a]
+|     partitions=10/10 size=743.67KB
+|     predicates: a.bigint_col < 50
+|
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=956.90KB
+====
+# Self-join of view to make sure the on clause is properly set
+# in the cloned view instances.
+select * from functional.alltypes_view t1
+inner join functional.alltypes_view t2 on (t1.id = t2.id)
+inner join functional.alltypes_view t3 on (t2.id = t3.id)
+---- PLAN
+04:HASH JOIN [INNER JOIN]
+|  hash predicates: functional.alltypes.id = functional.alltypes.id
+|
+|--02:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=956.90KB compact
+|
+03:HASH JOIN [INNER JOIN]
+|  hash predicates: functional.alltypes.id = functional.alltypes.id
+|
+|--01:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=956.90KB compact
+|
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=956.90KB
+---- DISTRIBUTEDPLAN
+08:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+04:HASH JOIN [INNER JOIN, PARTITIONED]
+|  hash predicates: functional.alltypes.id = functional.alltypes.id
+|
+|--07:EXCHANGE [PARTITION=HASH(functional.alltypes.id)]
+|  |
+|  02:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=956.90KB
+|
+03:HASH JOIN [INNER JOIN, PARTITIONED]
+|  hash predicates: functional.alltypes.id = functional.alltypes.id
+|
+|--06:EXCHANGE [PARTITION=HASH(functional.alltypes.id)]
+|  |
+|  01:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=956.90KB
+|
+05:EXCHANGE [PARTITION=HASH(functional.alltypes.id)]
+|
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=956.90KB
+====
+# Self-join views to make sure the using clause is properly set
+# in the cloned view instances.
+select * from functional.alltypes_view t1
+inner join functional.alltypes_view t2 using(id)
+inner join functional.alltypes_view t3 using(id)
+---- PLAN
+04:HASH JOIN [INNER JOIN]
+|  hash predicates: functional.alltypes.id = functional.alltypes.id
+|
+|--02:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=956.90KB compact
+|
+03:HASH JOIN [INNER JOIN]
+|  hash predicates: functional.alltypes.id = functional.alltypes.id
+|
+|--01:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=956.90KB compact
+|
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=956.90KB
+---- DISTRIBUTEDPLAN
+08:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+04:HASH JOIN [INNER JOIN, PARTITIONED]
+|  hash predicates: functional.alltypes.id = functional.alltypes.id
+|
+|--07:EXCHANGE [PARTITION=HASH(functional.alltypes.id)]
+|  |
+|  02:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=956.90KB
+|
+03:HASH JOIN [INNER JOIN, PARTITIONED]
+|  hash predicates: functional.alltypes.id = functional.alltypes.id
+|
+|--06:EXCHANGE [PARTITION=HASH(functional.alltypes.id)]
+|  |
+|  01:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=956.90KB
+|
+05:EXCHANGE [PARTITION=HASH(functional.alltypes.id)]
+|
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=956.90KB
+====
+# Self-join of view to make sure the join op is properly set
+# in the cloned view instances.
+select * from functional.alltypes_view t1
+left outer join functional.alltypes_view t2 using(id)
+full outer join functional.alltypes_view t3 using(id)
+---- PLAN
+04:HASH JOIN [FULL OUTER JOIN]
+|  hash predicates: functional.alltypes.id = functional.alltypes.id
+|
+|--02:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=956.90KB compact
+|
+03:HASH JOIN [LEFT OUTER JOIN]
+|  hash predicates: functional.alltypes.id = functional.alltypes.id
+|
+|--01:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=956.90KB compact
+|
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=956.90KB
+---- DISTRIBUTEDPLAN
+08:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+04:HASH JOIN [FULL OUTER JOIN, PARTITIONED]
+|  hash predicates: functional.alltypes.id = functional.alltypes.id
+|
+|--07:EXCHANGE [PARTITION=HASH(functional.alltypes.id)]
+|  |
+|  02:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=956.90KB
+|
+03:HASH JOIN [LEFT OUTER JOIN, PARTITIONED]
+|  hash predicates: functional.alltypes.id = functional.alltypes.id
+|
+|--06:EXCHANGE [PARTITION=HASH(functional.alltypes.id)]
+|  |
+|  01:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=956.90KB
+|
+05:EXCHANGE [PARTITION=HASH(functional.alltypes.id)]
+|
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=956.90KB
+====
+# Self-join of view to make sure join hints are properly set
+# in the cloned view instances.
+# Note that in the plan above without hints the first join uses shuffle
+# and the second broadcast.
+select * from functional.alltypes_view t1
+inner join [broadcast] functional.alltypes_view t2 using(id)
+inner join [shuffle] functional.alltypes_view t3 using(id)
+---- PLAN
+04:HASH JOIN [INNER JOIN]
+|  hash predicates: functional.alltypes.id = functional.alltypes.id
+|
+|--02:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=956.90KB compact
+|
+03:HASH JOIN [INNER JOIN]
+|  hash predicates: functional.alltypes.id = functional.alltypes.id
+|
+|--01:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=956.90KB compact
+|
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=956.90KB
+---- DISTRIBUTEDPLAN
+08:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+04:HASH JOIN [INNER JOIN, PARTITIONED]
+|  hash predicates: functional.alltypes.id = functional.alltypes.id
+|
+|--07:EXCHANGE [PARTITION=HASH(functional.alltypes.id)]
+|  |
+|  02:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=956.90KB
+|
+06:EXCHANGE [PARTITION=HASH(functional.alltypes.id)]
+|
+03:HASH JOIN [INNER JOIN, BROADCAST]
+|  hash predicates: functional.alltypes.id = functional.alltypes.id
+|
+|--05:EXCHANGE [BROADCAST]
+|  |
+|  01:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=956.90KB
+|
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=956.90KB
+====
+# Tests that parentheses are preserved when creating a view
+# enabling proper partition pruning for this particular view.
+select * from functional.alltypes_parens
+---- PLAN
+00:SCAN HDFS [functional.alltypes]
+   partitions=1/24 size=59.86KB
+   predicates: (int_col < 100 OR bool_col = FALSE)
+---- DISTRIBUTEDPLAN
+01:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+00:SCAN HDFS [functional.alltypes]
+   partitions=1/24 size=59.86KB
+   predicates: (int_col < 100 OR bool_col = FALSE)
+====

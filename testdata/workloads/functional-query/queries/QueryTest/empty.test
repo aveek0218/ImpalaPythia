@@ -1,0 +1,22 @@
+====
+---- QUERY
+# testtbl is empty
+select * from testtbl
+---- TYPES
+bigint, string, int
+---- RESULTS
+====
+---- QUERY
+# month ends at 12
+select int_col from alltypessmall where month > 100
+---- TYPES
+int
+---- RESULTS
+====
+---- QUERY
+# Empty partitioned table test
+select field from emptytable
+---- TYPES
+string
+---- RESULTS
+====

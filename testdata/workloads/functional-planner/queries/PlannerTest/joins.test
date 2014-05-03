@@ -1,0 +1,732 @@
+select *
+from functional.testtbl t1 join functional.testtbl t2 using(id)
+where t1.zip = 94611
+---- PLAN
+02:HASH JOIN [INNER JOIN]
+|  hash predicates: t1.id = t2.id
+|
+|--01:SCAN HDFS [functional.testtbl t2]
+|     partitions=1/1 size=0B compact
+|
+00:SCAN HDFS [functional.testtbl t1]
+   partitions=1/1 size=0B
+   predicates: t1.zip = 94611
+---- DISTRIBUTEDPLAN
+04:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+02:HASH JOIN [INNER JOIN, BROADCAST]
+|  hash predicates: t1.id = t2.id
+|
+|--03:EXCHANGE [BROADCAST]
+|  |
+|  01:SCAN HDFS [functional.testtbl t2]
+|     partitions=1/1 size=0B
+|
+00:SCAN HDFS [functional.testtbl t1]
+   partitions=1/1 size=0B
+   predicates: t1.zip = 94611
+====
+# general exprs on both sides of equi-join predicates
+select *
+from functional.testtbl t1 left outer join functional.testtbl t2
+on (t1.id - 1 = t2.id + 1)
+where t1.zip = 94611
+---- PLAN
+02:HASH JOIN [LEFT OUTER JOIN]
+|  hash predicates: t1.id - 1 = t2.id + 1
+|
+|--01:SCAN HDFS [functional.testtbl t2]
+|     partitions=1/1 size=0B compact
+|
+00:SCAN HDFS [functional.testtbl t1]
+   partitions=1/1 size=0B
+   predicates: t1.zip = 94611
+---- DISTRIBUTEDPLAN
+04:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+02:HASH JOIN [LEFT OUTER JOIN, BROADCAST]
+|  hash predicates: t1.id - 1 = t2.id + 1
+|
+|--03:EXCHANGE [BROADCAST]
+|  |
+|  01:SCAN HDFS [functional.testtbl t2]
+|     partitions=1/1 size=0B
+|
+00:SCAN HDFS [functional.testtbl t1]
+   partitions=1/1 size=0B
+   predicates: t1.zip = 94611
+====
+# test that on-clause predicates referring to multiple tuple ids
+# get registered as eq join conjuncts
+select t1.*
+from (select * from functional.alltypestiny) t1
+  join (select * from functional.alltypestiny) t2 on (t1.id = t2.id)
+  join functional.alltypestiny t3 on (coalesce(t1.id, t2.id) = t3.id)
+---- PLAN
+04:HASH JOIN [INNER JOIN]
+|  hash predicates: coalesce(functional.alltypestiny.id, functional.alltypestiny.id) = t3.id
+|
+|--02:SCAN HDFS [functional.alltypestiny t3]
+|     partitions=4/4 size=460B compact
+|
+03:HASH JOIN [INNER JOIN]
+|  hash predicates: functional.alltypestiny.id = functional.alltypestiny.id
+|
+|--01:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B compact
+|
+00:SCAN HDFS [functional.alltypestiny]
+   partitions=4/4 size=920B
+---- DISTRIBUTEDPLAN
+08:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+04:HASH JOIN [INNER JOIN, BROADCAST]
+|  hash predicates: coalesce(functional.alltypestiny.id, functional.alltypestiny.id) = t3.id
+|
+|--07:EXCHANGE [BROADCAST]
+|  |
+|  02:SCAN HDFS [functional.alltypestiny t3]
+|     partitions=4/4 size=460B
+|
+03:HASH JOIN [INNER JOIN, PARTITIONED]
+|  hash predicates: functional.alltypestiny.id = functional.alltypestiny.id
+|
+|--06:EXCHANGE [PARTITION=HASH(functional.alltypestiny.id)]
+|  |
+|  01:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B
+|
+05:EXCHANGE [PARTITION=HASH(functional.alltypestiny.id)]
+|
+00:SCAN HDFS [functional.alltypestiny]
+   partitions=4/4 size=920B
+====
+# test that our join inference recognizes that we cannot do a hash join
+select t1.*
+from (select * from functional.alltypestiny) t1
+  join (select * from functional.alltypestiny) t2 on (t1.id = t2.id)
+  join functional.alltypestiny t3 on (coalesce(t1.id, t3.id) = t3.id)
+---- PLAN
+not implemented: Join with 't3' requires at least one conjunctive equality predicate. To perform a Cartesian product between two tables, use a CROSS JOIN.
+====
+# multiple join predicates;
+# scan predicates get propagated correctly;
+# non-eq join predicates are evaluated as extra conjuncts by the join node
+select *
+from functional.alltypesagg a right outer join functional.alltypessmall b using (id, int_col)
+where a.day >= 6
+and b.month > 2
+and a.tinyint_col = 15
+and b.string_col = '15'
+and a.tinyint_col + b.tinyint_col < 15
+---- PLAN
+02:HASH JOIN [RIGHT OUTER JOIN]
+|  hash predicates: a.id = b.id, a.int_col = b.int_col
+|  other predicates: a.day >= 6, a.tinyint_col = 15, a.tinyint_col + b.tinyint_col < 15
+|
+|--01:SCAN HDFS [functional.alltypessmall b]
+|     partitions=2/4 size=3.17KB compact
+|     predicates: b.string_col = '15'
+|
+00:SCAN HDFS [functional.alltypesagg a]
+   partitions=5/10 size=372.38KB
+   predicates: a.tinyint_col = 15
+---- DISTRIBUTEDPLAN
+05:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+02:HASH JOIN [RIGHT OUTER JOIN, PARTITIONED]
+|  hash predicates: a.id = b.id, a.int_col = b.int_col
+|  other predicates: a.day >= 6, a.tinyint_col = 15, a.tinyint_col + b.tinyint_col < 15
+|
+|--04:EXCHANGE [PARTITION=HASH(b.id,b.int_col)]
+|  |
+|  01:SCAN HDFS [functional.alltypessmall b]
+|     partitions=2/4 size=3.17KB
+|     predicates: b.string_col = '15'
+|
+03:EXCHANGE [PARTITION=HASH(a.id,a.int_col)]
+|
+00:SCAN HDFS [functional.alltypesagg a]
+   partitions=5/10 size=372.38KB
+   predicates: a.tinyint_col = 15
+====
+# same as before, with 3 tables;
+# non-eq join predicates are evaluated at the correct join node
+select *
+from functional.alltypesagg a
+full outer join functional.alltypessmall b using (id, int_col)
+right join functional.alltypesaggnonulls c on (a.id = c.id and b.string_col = c.string_col)
+where a.day >= 6
+and b.month > 2
+and c.day < 3
+and a.tinyint_col = 15
+and b.string_col = '15'
+and a.tinyint_col + b.tinyint_col < 15
+and a.float_col - c.double_col < 0
+and (b.double_col * c.tinyint_col > 1000 or c.tinyint_col < 1000)
+---- PLAN
+04:HASH JOIN [RIGHT OUTER JOIN]
+|  hash predicates: a.id = c.id, b.string_col = c.string_col
+|  other predicates: a.day >= 6, b.month > 2, a.tinyint_col = 15, b.string_col = '15', a.tinyint_col + b.tinyint_col < 15, a.float_col - c.double_col < 0.0, (b.double_col * c.tinyint_col > 1000.0 OR c.tinyint_col < 1000)
+|
+|--02:SCAN HDFS [functional.alltypesaggnonulls c]
+|     partitions=2/10 size=148.10KB compact
+|
+03:HASH JOIN [FULL OUTER JOIN]
+|  hash predicates: a.id = b.id, a.int_col = b.int_col
+|
+|--01:SCAN HDFS [functional.alltypessmall b]
+|     partitions=2/4 size=3.17KB compact
+|     predicates: b.string_col = '15'
+|
+00:SCAN HDFS [functional.alltypesagg a]
+   partitions=5/10 size=372.38KB
+   predicates: a.tinyint_col = 15
+---- DISTRIBUTEDPLAN
+09:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+04:HASH JOIN [RIGHT OUTER JOIN, PARTITIONED]
+|  hash predicates: a.id = c.id, b.string_col = c.string_col
+|  other predicates: a.day >= 6, b.month > 2, a.tinyint_col = 15, b.string_col = '15', a.tinyint_col + b.tinyint_col < 15, a.float_col - c.double_col < 0.0, (b.double_col * c.tinyint_col > 1000.0 OR c.tinyint_col < 1000)
+|
+|--08:EXCHANGE [PARTITION=HASH(c.id,c.string_col)]
+|  |
+|  02:SCAN HDFS [functional.alltypesaggnonulls c]
+|     partitions=2/10 size=148.10KB
+|
+07:EXCHANGE [PARTITION=HASH(a.id,b.string_col)]
+|
+03:HASH JOIN [FULL OUTER JOIN, PARTITIONED]
+|  hash predicates: a.id = b.id, a.int_col = b.int_col
+|
+|--06:EXCHANGE [PARTITION=HASH(b.id,b.int_col)]
+|  |
+|  01:SCAN HDFS [functional.alltypessmall b]
+|     partitions=2/4 size=3.17KB
+|     predicates: b.string_col = '15'
+|
+05:EXCHANGE [PARTITION=HASH(a.id,a.int_col)]
+|
+00:SCAN HDFS [functional.alltypesagg a]
+   partitions=5/10 size=372.38KB
+   predicates: a.tinyint_col = 15
+====
+# non-equi join predicate not supported
+select *
+from functional.testtbl t1 join functional.testtbl t2
+where t1.zip < t2.zip
+---- PLAN
+not implemented: Join with 't2' requires at least one conjunctive equality predicate. To perform a Cartesian product between two tables, use a CROSS JOIN.
+====
+# equi join with constants in the on clause are not supported
+select a.id, b.id from
+(select 1 as x, id from functional.alltypessmall) a
+inner join
+(select 1 as x, id from functional.alltypessmall) b
+on a.x = b.x
+---- PLAN
+02:HASH JOIN [INNER JOIN]
+|  hash predicates: 1 = 1
+|
+|--01:SCAN HDFS [functional.alltypessmall]
+|     partitions=4/4 size=12.64KB compact
+|
+00:SCAN HDFS [functional.alltypessmall]
+   partitions=4/4 size=12.64KB
+====
+# join using values() in a subquery
+select a.int_col, b.x from functional.alltypessmall a inner join
+(values(1 as int_col, 'a' as x), (1, 'b'), (2, 'c')) b on a.int_col = b.int_col
+---- PLAN
+02:HASH JOIN [INNER JOIN]
+|  hash predicates: a.int_col = int_col
+|
+|--01:MERGE
+|     constant-selects=3
+|
+00:SCAN HDFS [functional.alltypessmall a]
+   partitions=4/4 size=6.32KB
+---- DISTRIBUTEDPLAN
+04:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+02:HASH JOIN [INNER JOIN, BROADCAST]
+|  hash predicates: a.int_col = int_col
+|
+|--03:EXCHANGE [BROADCAST]
+|  |
+|  01:MERGE
+|     constant-selects=3
+|
+00:SCAN HDFS [functional.alltypessmall a]
+   partitions=4/4 size=6.32KB
+====
+# hbase-hdfs join
+select *
+from functional.alltypesagg join functional_hbase.alltypessmall using (id, int_col)
+---- PLAN
+02:HASH JOIN [INNER JOIN]
+|  hash predicates: functional.alltypesagg.id = functional_hbase.alltypessmall.id, functional.alltypesagg.int_col = functional_hbase.alltypessmall.int_col
+|
+|--01:SCAN HBASE [functional_hbase.alltypessmall]
+|
+00:SCAN HDFS [functional.alltypesagg]
+   partitions=10/10 size=743.67KB
+---- DISTRIBUTEDPLAN
+04:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+02:HASH JOIN [INNER JOIN, BROADCAST]
+|  hash predicates: functional.alltypesagg.id = functional_hbase.alltypessmall.id, functional.alltypesagg.int_col = functional_hbase.alltypessmall.int_col
+|
+|--03:EXCHANGE [BROADCAST]
+|  |
+|  01:SCAN HBASE [functional_hbase.alltypessmall]
+|
+00:SCAN HDFS [functional.alltypesagg]
+   partitions=10/10 size=743.67KB
+====
+# hbase-hdfs join with scan filtering
+select *
+from functional.alltypesagg a join functional_hbase.stringids b
+       on (a.id = cast(b.id as int) and a.int_col = b.int_col)
+where a.day >= 6
+and a.tinyint_col = 15
+and b.id = '5'
+and b.tinyint_col = 5
+and b.tinyint_col > 123
+and a.tinyint_col + b.tinyint_col < 15
+---- PLAN
+02:HASH JOIN [INNER JOIN]
+|  hash predicates: a.id = CAST(b.id AS INT), a.int_col = b.int_col
+|  other predicates: a.tinyint_col + b.tinyint_col < 15
+|
+|--01:SCAN HBASE [functional_hbase.stringids b]
+|     start key: 5
+|     stop key: 5\0
+|     predicates: b.tinyint_col = 5, b.tinyint_col > 123
+|
+00:SCAN HDFS [functional.alltypesagg a]
+   partitions=5/10 size=372.38KB
+   predicates: a.tinyint_col = 15
+---- SCANRANGELOCATIONS
+NODE 0:
+  HDFS SPLIT hdfs://localhost:20500/test-warehouse/alltypesagg/year=2010/month=1/day=10/100110.txt 0:76263
+  HDFS SPLIT hdfs://localhost:20500/test-warehouse/alltypesagg/year=2010/month=1/day=6/100106.txt 0:76263
+  HDFS SPLIT hdfs://localhost:20500/test-warehouse/alltypesagg/year=2010/month=1/day=7/100107.txt 0:76263
+  HDFS SPLIT hdfs://localhost:20500/test-warehouse/alltypesagg/year=2010/month=1/day=8/100108.txt 0:76263
+  HDFS SPLIT hdfs://localhost:20500/test-warehouse/alltypesagg/year=2010/month=1/day=9/100109.txt 0:76263
+NODE 1:
+  HBASE KEYRANGE port=60202 5:5\0
+---- DISTRIBUTEDPLAN
+04:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+02:HASH JOIN [INNER JOIN, BROADCAST]
+|  hash predicates: a.id = CAST(b.id AS INT), a.int_col = b.int_col
+|  other predicates: a.tinyint_col + b.tinyint_col < 15
+|
+|--03:EXCHANGE [BROADCAST]
+|  |
+|  01:SCAN HBASE [functional_hbase.stringids b]
+|     start key: 5
+|     stop key: 5\0
+|     predicates: b.tinyint_col = 5, b.tinyint_col > 123
+|
+00:SCAN HDFS [functional.alltypesagg a]
+   partitions=5/10 size=372.38KB
+   predicates: a.tinyint_col = 15
+====
+# left join followed by right join and then aggregate
+select x.tinyint_col, count(x.day)
+from (
+       select a.day day, c.tinyint_col tinyint_col
+       from functional.alltypesagg a
+            join functional.alltypessmall b using (id, int_col)
+            right outer join functional.alltypesnopart c on (b.id = c.id)
+            join functional.alltypesagg d on (a.id = d.id)
+       order by 1,2
+       limit 10
+     ) x
+where x.day >= 6
+group by x.tinyint_col
+order by 2
+limit 5
+---- PLAN
+10:TOP-N [LIMIT=5]
+|  order by: COUNT(x.day) ASC
+|
+09:AGGREGATE [FINALIZE]
+|  output: COUNT(a.day)
+|  group by: c.tinyint_col
+|
+08:SELECT
+|  predicates: a.day >= 6
+|
+07:TOP-N [LIMIT=10]
+|  order by: a.day ASC, c.tinyint_col ASC
+|
+06:HASH JOIN [INNER JOIN]
+|  hash predicates: a.id = d.id
+|
+|--03:SCAN HDFS [functional.alltypesagg d]
+|     partitions=10/10 size=743.67KB compact
+|
+05:HASH JOIN [RIGHT OUTER JOIN]
+|  hash predicates: b.id = c.id
+|
+|--02:SCAN HDFS [functional.alltypesnopart c]
+|     partitions=1/1 size=0B compact
+|
+04:HASH JOIN [INNER JOIN]
+|  hash predicates: a.id = b.id, a.int_col = b.int_col
+|
+|--01:SCAN HDFS [functional.alltypessmall b]
+|     partitions=4/4 size=6.32KB compact
+|
+00:SCAN HDFS [functional.alltypesagg a]
+   partitions=10/10 size=743.67KB
+---- DISTRIBUTEDPLAN
+10:TOP-N [LIMIT=5]
+|  order by: COUNT(x.day) ASC
+|
+09:AGGREGATE [FINALIZE]
+|  output: COUNT(a.day)
+|  group by: c.tinyint_col
+|
+08:SELECT
+|  predicates: a.day >= 6
+|
+16:TOP-N [LIMIT=10]
+|  order by: a.day ASC, c.tinyint_col ASC
+|
+15:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+07:TOP-N [LIMIT=10]
+|  order by: a.day ASC, c.tinyint_col ASC
+|
+06:HASH JOIN [INNER JOIN, PARTITIONED]
+|  hash predicates: a.id = d.id
+|
+|--14:EXCHANGE [PARTITION=HASH(d.id)]
+|  |
+|  03:SCAN HDFS [functional.alltypesagg d]
+|     partitions=10/10 size=743.67KB
+|
+05:HASH JOIN [RIGHT OUTER JOIN, PARTITIONED]
+|  hash predicates: b.id = c.id
+|
+|--13:EXCHANGE [PARTITION=HASH(c.id)]
+|  |
+|  02:SCAN HDFS [functional.alltypesnopart c]
+|     partitions=1/1 size=0B
+|
+12:EXCHANGE [PARTITION=HASH(b.id)]
+|
+04:HASH JOIN [INNER JOIN, BROADCAST]
+|  hash predicates: a.id = b.id, a.int_col = b.int_col
+|
+|--11:EXCHANGE [BROADCAST]
+|  |
+|  01:SCAN HDFS [functional.alltypessmall b]
+|     partitions=4/4 size=6.32KB
+|
+00:SCAN HDFS [functional.alltypesagg a]
+   partitions=10/10 size=743.67KB
+====
+# join without "other join conjuncts"
+select * from functional.alltypessmall a, functional.alltypessmall b where a.id = b.id limit 1
+---- PLAN
+02:HASH JOIN [INNER JOIN]
+|  hash predicates: a.id = b.id
+|  limit: 1
+|
+|--01:SCAN HDFS [functional.alltypessmall b]
+|     partitions=4/4 size=6.32KB compact
+|
+00:SCAN HDFS [functional.alltypessmall a]
+   partitions=4/4 size=6.32KB
+---- DISTRIBUTEDPLAN
+05:EXCHANGE [PARTITION=UNPARTITIONED]
+|  limit: 1
+|
+02:HASH JOIN [INNER JOIN, PARTITIONED]
+|  hash predicates: a.id = b.id
+|  limit: 1
+|
+|--04:EXCHANGE [PARTITION=HASH(b.id)]
+|  |
+|  01:SCAN HDFS [functional.alltypessmall b]
+|     partitions=4/4 size=6.32KB
+|
+03:EXCHANGE [PARTITION=HASH(a.id)]
+|
+00:SCAN HDFS [functional.alltypessmall a]
+   partitions=4/4 size=6.32KB
+====
+# join conjunct is derived from equivalence classes
+# (no explicit join conjunct between t1 and t2)
+select *
+from functional.testtbl t1, functional.testtbl t2, functional.testtbl t3
+where t1.id = t3.id and t2.id = t3.id
+---- PLAN
+04:HASH JOIN [INNER JOIN]
+|  hash predicates: t1.id = t3.id
+|
+|--02:SCAN HDFS [functional.testtbl t3]
+|     partitions=1/1 size=0B compact
+|
+03:HASH JOIN [INNER JOIN]
+|  hash predicates: t1.id = t2.id
+|
+|--01:SCAN HDFS [functional.testtbl t2]
+|     partitions=1/1 size=0B compact
+|
+00:SCAN HDFS [functional.testtbl t1]
+   partitions=1/1 size=0B
+---- DISTRIBUTEDPLAN
+07:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+04:HASH JOIN [INNER JOIN, BROADCAST]
+|  hash predicates: t1.id = t3.id
+|
+|--06:EXCHANGE [BROADCAST]
+|  |
+|  02:SCAN HDFS [functional.testtbl t3]
+|     partitions=1/1 size=0B
+|
+03:HASH JOIN [INNER JOIN, BROADCAST]
+|  hash predicates: t1.id = t2.id
+|
+|--05:EXCHANGE [BROADCAST]
+|  |
+|  01:SCAN HDFS [functional.testtbl t2]
+|     partitions=1/1 size=0B
+|
+00:SCAN HDFS [functional.testtbl t1]
+   partitions=1/1 size=0B
+====
+# join involving a table with no table stats (functional.emptytable)
+# tests that the default join strategy is broadcast
+select * from functional.emptytable a inner join
+functional.alltypes b on a.f2 = b.int_col
+---- PLAN
+02:HASH JOIN [INNER JOIN]
+|  hash predicates: b.int_col = a.f2
+|
+|--00:SCAN HDFS [functional.emptytable a]
+|     partitions=0/0 size=0B compact
+|
+01:SCAN HDFS [functional.alltypes b]
+   partitions=24/24 size=478.45KB
+---- DISTRIBUTEDPLAN
+04:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+02:HASH JOIN [INNER JOIN, BROADCAST]
+|  hash predicates: b.int_col = a.f2
+|
+|--03:EXCHANGE [BROADCAST]
+|  |
+|  00:SCAN HDFS [functional.emptytable a]
+|     partitions=0/0 size=0B
+|
+01:SCAN HDFS [functional.alltypes b]
+   partitions=24/24 size=478.45KB
+====
+# cross join
+select *
+from functional.testtbl t1 cross join functional.testtbl
+---- PLAN
+02:CROSS JOIN [BROADCAST]
+|
+|--01:SCAN HDFS [functional.testtbl]
+|     partitions=1/1 size=0B compact
+|
+00:SCAN HDFS [functional.testtbl t1]
+   partitions=1/1 size=0B
+---- DISTRIBUTEDPLAN
+04:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+02:CROSS JOIN [BROADCAST]
+|
+|--03:EXCHANGE [BROADCAST]
+|  |
+|  01:SCAN HDFS [functional.testtbl]
+|     partitions=1/1 size=0B
+|
+00:SCAN HDFS [functional.testtbl t1]
+   partitions=1/1 size=0B
+====
+# cross join with where clause
+select *
+from functional.testtbl t1 cross join functional.testtbl t2 where t1.id < t2.id
+---- PLAN
+02:CROSS JOIN [BROADCAST]
+|  predicates: t1.id < t2.id
+|
+|--01:SCAN HDFS [functional.testtbl t2]
+|     partitions=1/1 size=0B compact
+|
+00:SCAN HDFS [functional.testtbl t1]
+   partitions=1/1 size=0B
+---- DISTRIBUTEDPLAN
+04:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+02:CROSS JOIN [BROADCAST]
+|  predicates: t1.id < t2.id
+|
+|--03:EXCHANGE [BROADCAST]
+|  |
+|  01:SCAN HDFS [functional.testtbl t2]
+|     partitions=1/1 size=0B
+|
+00:SCAN HDFS [functional.testtbl t1]
+   partitions=1/1 size=0B
+====
+# Tests that the partitioned join between b and c exploits the existing
+# data partition of its lhs input.
+select * from functional.alltypes a
+inner join [shuffle] functional.alltypes b
+on (a.id = b.id and b.int_col = a.int_col)
+inner join [shuffle] functional.alltypes c
+on (b.id = c.id and c.int_col = b.int_col)
+---- PLAN
+04:HASH JOIN [INNER JOIN]
+|  hash predicates: b.id = c.id, b.int_col = c.int_col
+|
+|--02:SCAN HDFS [functional.alltypes c]
+|     partitions=24/24 size=478.45KB compact
+|
+03:HASH JOIN [INNER JOIN]
+|  hash predicates: a.id = b.id, a.int_col = b.int_col
+|
+|--01:SCAN HDFS [functional.alltypes b]
+|     partitions=24/24 size=478.45KB compact
+|
+00:SCAN HDFS [functional.alltypes a]
+   partitions=24/24 size=478.45KB
+---- DISTRIBUTEDPLAN
+08:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+04:HASH JOIN [INNER JOIN, PARTITIONED]
+|  hash predicates: b.id = c.id, b.int_col = c.int_col
+|
+|--07:EXCHANGE [PARTITION=HASH(c.id,c.int_col)]
+|  |
+|  02:SCAN HDFS [functional.alltypes c]
+|     partitions=24/24 size=478.45KB
+|
+03:HASH JOIN [INNER JOIN, PARTITIONED]
+|  hash predicates: a.id = b.id, a.int_col = b.int_col
+|
+|--06:EXCHANGE [PARTITION=HASH(b.id,b.int_col)]
+|  |
+|  01:SCAN HDFS [functional.alltypes b]
+|     partitions=24/24 size=478.45KB
+|
+05:EXCHANGE [PARTITION=HASH(a.id,a.int_col)]
+|
+00:SCAN HDFS [functional.alltypes a]
+   partitions=24/24 size=478.45KB
+====
+# Tests that the partitioned join between a and b exploits the existing
+# data partition of its rhs input.
+select * from functional.alltypes a
+inner join [shuffle]
+  (select count(*), int_col, bool_col
+   from functional.alltypes group by int_col, bool_col) b
+on (a.int_col = b.int_col and b.bool_col = a.bool_col)
+---- PLAN
+03:HASH JOIN [INNER JOIN]
+|  hash predicates: a.int_col = int_col, a.bool_col = bool_col
+|
+|--02:AGGREGATE [FINALIZE]
+|  |  output: COUNT(*)
+|  |  group by: int_col, bool_col
+|  |
+|  01:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=478.45KB
+|
+00:SCAN HDFS [functional.alltypes a]
+   partitions=24/24 size=478.45KB
+---- DISTRIBUTEDPLAN
+07:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+03:HASH JOIN [INNER JOIN, PARTITIONED]
+|  hash predicates: a.int_col = int_col, a.bool_col = bool_col
+|
+|--05:AGGREGATE [MERGE FINALIZE]
+|  |  output: SUM(COUNT(*))
+|  |  group by: int_col, bool_col
+|  |
+|  04:EXCHANGE [PARTITION=HASH(int_col,bool_col)]
+|  |
+|  02:AGGREGATE
+|  |  output: COUNT(*)
+|  |  group by: int_col, bool_col
+|  |
+|  01:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=478.45KB
+|
+06:EXCHANGE [PARTITION=HASH(a.int_col,a.bool_col)]
+|
+00:SCAN HDFS [functional.alltypes a]
+   partitions=24/24 size=478.45KB
+====
+# Tests that the partitioned join between b and c exploits the existing
+# data partition of its lhs and rhs inputs.
+select * from functional.alltypes a
+inner join [shuffle] functional.alltypes b
+on(a.int_col = b.int_col and b.bool_col = a.bool_col)
+inner join [shuffle]
+  (select count(*), int_col, bool_col
+   from functional.alltypes group by int_col, bool_col) c
+on (b.int_col = c.int_col and c.bool_col = b.bool_col)
+---- PLAN
+05:HASH JOIN [INNER JOIN]
+|  hash predicates: a.int_col = b.int_col, a.bool_col = b.bool_col
+|
+|--01:SCAN HDFS [functional.alltypes b]
+|     partitions=24/24 size=478.45KB compact
+|
+04:HASH JOIN [INNER JOIN]
+|  hash predicates: a.int_col = int_col, a.bool_col = bool_col
+|
+|--03:AGGREGATE [FINALIZE]
+|  |  output: COUNT(*)
+|  |  group by: int_col, bool_col
+|  |
+|  02:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=478.45KB
+|
+00:SCAN HDFS [functional.alltypes a]
+   partitions=24/24 size=478.45KB
+---- DISTRIBUTEDPLAN
+10:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+05:HASH JOIN [INNER JOIN, PARTITIONED]
+|  hash predicates: a.int_col = b.int_col, a.bool_col = b.bool_col
+|
+|--09:EXCHANGE [PARTITION=HASH(b.int_col,b.bool_col)]
+|  |
+|  01:SCAN HDFS [functional.alltypes b]
+|     partitions=24/24 size=478.45KB
+|
+04:HASH JOIN [INNER JOIN, PARTITIONED]
+|  hash predicates: a.int_col = int_col, a.bool_col = bool_col
+|
+|--07:AGGREGATE [MERGE FINALIZE]
+|  |  output: SUM(COUNT(*))
+|  |  group by: int_col, bool_col
+|  |
+|  06:EXCHANGE [PARTITION=HASH(int_col,bool_col)]
+|  |
+|  03:AGGREGATE
+|  |  output: COUNT(*)
+|  |  group by: int_col, bool_col
+|  |
+|  02:SCAN HDFS [functional.alltypes]
+|     partitions=24/24 size=478.45KB
+|
+08:EXCHANGE [PARTITION=HASH(a.int_col,a.bool_col)]
+|
+00:SCAN HDFS [functional.alltypes a]
+   partitions=24/24 size=478.45KB
+====

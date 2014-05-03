@@ -1,0 +1,135 @@
+select name, zip
+from functional.testtbl
+order by name
+limit 1
+---- PLAN
+01:TOP-N [LIMIT=1]
+|  order by: name ASC
+|
+00:SCAN HDFS [functional.testtbl]
+   partitions=1/1 size=0B
+---- DISTRIBUTEDPLAN
+03:TOP-N [LIMIT=1]
+|  order by: name ASC
+|
+02:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+01:TOP-N [LIMIT=1]
+|  order by: name ASC
+|
+00:SCAN HDFS [functional.testtbl]
+   partitions=1/1 size=0B
+====
+select zip, count(*)
+from functional.testtbl
+where name like 'm%'
+group by 1
+order by 2 desc
+limit 10
+---- PLAN
+02:TOP-N [LIMIT=10]
+|  order by: COUNT(*) DESC
+|
+01:AGGREGATE [FINALIZE]
+|  output: COUNT(*)
+|  group by: zip
+|
+00:SCAN HDFS [functional.testtbl]
+   partitions=1/1 size=0B
+   predicates: name LIKE 'm%'
+---- DISTRIBUTEDPLAN
+06:TOP-N [LIMIT=10]
+|  order by: COUNT(*) DESC
+|
+05:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+02:TOP-N [LIMIT=10]
+|  order by: COUNT(*) DESC
+|
+04:AGGREGATE [MERGE FINALIZE]
+|  output: SUM(COUNT(*))
+|  group by: zip
+|
+03:EXCHANGE [PARTITION=HASH(zip)]
+|
+01:AGGREGATE
+|  output: COUNT(*)
+|  group by: zip
+|
+00:SCAN HDFS [functional.testtbl]
+   partitions=1/1 size=0B
+   predicates: name LIKE 'm%'
+====
+select int_col, sum(float_col)
+from functional_hbase.alltypessmall
+where id < 5
+group by 1
+order by 2
+limit 4
+---- PLAN
+02:TOP-N [LIMIT=4]
+|  order by: SUM(float_col) ASC
+|
+01:AGGREGATE [FINALIZE]
+|  output: SUM(float_col)
+|  group by: int_col
+|
+00:SCAN HBASE [functional_hbase.alltypessmall]
+   predicates: id < 5
+---- DISTRIBUTEDPLAN
+06:TOP-N [LIMIT=4]
+|  order by: SUM(float_col) ASC
+|
+05:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+02:TOP-N [LIMIT=4]
+|  order by: SUM(float_col) ASC
+|
+04:AGGREGATE [MERGE FINALIZE]
+|  output: SUM(SUM(float_col))
+|  group by: int_col
+|
+03:EXCHANGE [PARTITION=HASH(int_col)]
+|
+01:AGGREGATE
+|  output: SUM(float_col)
+|  group by: int_col
+|
+00:SCAN HBASE [functional_hbase.alltypessmall]
+   predicates: id < 5
+====
+select int_col, sum(float_col), min(float_col)
+from functional_hbase.alltypessmall
+group by 1
+order by 2,3 desc
+limit 0
+---- PLAN
+02:TOP-N [LIMIT=0]
+|  order by: SUM(float_col) ASC, MIN(float_col) DESC
+|
+01:AGGREGATE [FINALIZE]
+|  output: SUM(float_col), MIN(float_col)
+|  group by: int_col
+|
+00:SCAN HBASE [functional_hbase.alltypessmall]
+---- DISTRIBUTEDPLAN
+06:TOP-N [LIMIT=0]
+|  order by: SUM(float_col) ASC, MIN(float_col) DESC
+|
+05:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+02:TOP-N [LIMIT=0]
+|  order by: SUM(float_col) ASC, MIN(float_col) DESC
+|
+04:AGGREGATE [MERGE FINALIZE]
+|  output: SUM(SUM(float_col)), MIN(MIN(float_col))
+|  group by: int_col
+|
+03:EXCHANGE [PARTITION=HASH(int_col)]
+|
+01:AGGREGATE
+|  output: SUM(float_col), MIN(float_col)
+|  group by: int_col
+|
+00:SCAN HBASE [functional_hbase.alltypessmall]
+====

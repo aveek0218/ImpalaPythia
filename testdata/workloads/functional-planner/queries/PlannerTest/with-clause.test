@@ -1,0 +1,467 @@
+# Basic test with a single with-clause view.
+with t as (select int_col x, bigint_col y from functional.alltypes) select x, y from t
+---- PLAN
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=1.40MB
+---- DISTRIBUTEDPLAN
+01:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=1.40MB
+====
+# Basic test with a single with-clause view that references a catalog view.
+with t as (select int_col x, bigint_col y from functional.alltypes_view)
+select x, y from t
+---- PLAN
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=1.87MB
+---- DISTRIBUTEDPLAN
+01:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=1.87MB
+====
+# Multiple views in with-clause. Only one view is used.
+with t1 as (select int_col x, bigint_col y from functional.alltypes),
+t2 as (select 1 x , 10 y), t3 as (values(2 x , 20 y), (3, 30))
+select x, y from t2
+---- PLAN
+00:MERGE
+   constant-selects=1
+---- DISTRIBUTEDPLAN
+00:MERGE
+   constant-selects=1
+====
+# Multiple views in with-clause. All views are used in a union.
+with t1 as (select int_col x, bigint_col y from functional.alltypes),
+t2 as (select 1 x , 10 y), t3 as (values(2 x , 20 y), (3, 30))
+select * from t1 union all select * from t2 union all select * from t3
+---- PLAN
+00:MERGE
+|
+|--03:MERGE
+|     constant-selects=2
+|
+|--02:MERGE
+|     constant-selects=1
+|
+01:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=1.40MB
+---- DISTRIBUTEDPLAN
+04:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+|--07:MERGE
+|  |
+|  03:MERGE
+|     constant-selects=2
+|
+|--06:MERGE
+|  |
+|  02:MERGE
+|     constant-selects=1
+|
+05:MERGE
+|
+01:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=1.40MB
+====
+# Multiple views in with-clause. All views are used in a join.
+with t1 as (select int_col x, bigint_col y from functional.alltypes),
+t2 as (select int_col x, bigint_col y from functional.alltypestiny),
+t3 as (select int_col x, bigint_col y from functional.alltypessmall)
+select * from t1, t2, t3 where t1.x = t2.x and t2.x = t3.x
+---- PLAN
+04:HASH JOIN [INNER JOIN]
+|  hash predicates: int_col = int_col
+|
+|--02:SCAN HDFS [functional.alltypessmall]
+|     partitions=4/4 size=12.64KB compact
+|
+03:HASH JOIN [INNER JOIN]
+|  hash predicates: int_col = int_col
+|
+|--01:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B compact
+|
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=956.90KB
+---- DISTRIBUTEDPLAN
+07:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+04:HASH JOIN [INNER JOIN, BROADCAST]
+|  hash predicates: int_col = int_col
+|
+|--06:EXCHANGE [BROADCAST]
+|  |
+|  02:SCAN HDFS [functional.alltypessmall]
+|     partitions=4/4 size=12.64KB
+|
+03:HASH JOIN [INNER JOIN, BROADCAST]
+|  hash predicates: int_col = int_col
+|
+|--05:EXCHANGE [BROADCAST]
+|  |
+|  01:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B
+|
+00:SCAN HDFS [functional.alltypes]
+   partitions=24/24 size=956.90KB
+====
+# Multiple dependent views in with-clause
+with t1 as (
+  select int_col c1, tinyint_col c2, max(id) c3
+  from functional.alltypessmall
+  group by 1, 2
+  order by 1,2
+  limit 5),
+t2 as (select c1, c2, c3 from t1),
+t3 as (
+  select c1, c3, max(c2) m2
+  from t2
+  group by c1, c3
+  limit 10),
+t4 as (select c1, c3, m2 from t3)
+select * from t4
+where c1 > 0
+order by c3, c1 desc
+limit 3
+---- PLAN
+05:TOP-N [LIMIT=3]
+|  order by: c3 ASC, c1 DESC
+|
+04:SELECT
+|  predicates: c1 > 0
+|
+03:AGGREGATE [FINALIZE]
+|  output: MAX(tinyint_col)
+|  group by: int_col, MAX(id)
+|  limit: 10
+|
+02:TOP-N [LIMIT=5]
+|  order by: int_col ASC, tinyint_col ASC
+|
+01:AGGREGATE [FINALIZE]
+|  output: MAX(id)
+|  group by: int_col, tinyint_col
+|
+00:SCAN HDFS [functional.alltypessmall]
+   partitions=4/4 size=6.32KB
+---- DISTRIBUTEDPLAN
+05:TOP-N [LIMIT=3]
+|  order by: c3 ASC, c1 DESC
+|
+04:SELECT
+|  predicates: c1 > 0
+|
+03:AGGREGATE [FINALIZE]
+|  output: MAX(tinyint_col)
+|  group by: int_col, MAX(id)
+|  limit: 10
+|
+09:TOP-N [LIMIT=5]
+|  order by: int_col ASC, tinyint_col ASC
+|
+08:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+02:TOP-N [LIMIT=5]
+|  order by: int_col ASC, tinyint_col ASC
+|
+07:AGGREGATE [MERGE FINALIZE]
+|  output: MAX(MAX(id))
+|  group by: int_col, tinyint_col
+|
+06:EXCHANGE [PARTITION=HASH(int_col,tinyint_col)]
+|
+01:AGGREGATE
+|  output: MAX(id)
+|  group by: int_col, tinyint_col
+|
+00:SCAN HDFS [functional.alltypessmall]
+   partitions=4/4 size=6.32KB
+====
+# Self-join of with-clause table to make sure the on clause is properly set
+# in the cloned inline-view instances.
+with t as (select int_col x, bigint_col y from functional.alltypestiny)
+select * from t t1 inner join t t2 on (t1.x = t2.x) inner join t t3 on (t2.x = t3.x)
+---- PLAN
+04:HASH JOIN [INNER JOIN]
+|  hash predicates: int_col = int_col
+|
+|--02:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B compact
+|
+03:HASH JOIN [INNER JOIN]
+|  hash predicates: int_col = int_col
+|
+|--01:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B compact
+|
+00:SCAN HDFS [functional.alltypestiny]
+   partitions=4/4 size=920B
+---- DISTRIBUTEDPLAN
+08:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+04:HASH JOIN [INNER JOIN, PARTITIONED]
+|  hash predicates: int_col = int_col
+|
+|--07:EXCHANGE [PARTITION=HASH(int_col)]
+|  |
+|  02:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B
+|
+03:HASH JOIN [INNER JOIN, PARTITIONED]
+|  hash predicates: int_col = int_col
+|
+|--06:EXCHANGE [PARTITION=HASH(int_col)]
+|  |
+|  01:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B
+|
+05:EXCHANGE [PARTITION=HASH(int_col)]
+|
+00:SCAN HDFS [functional.alltypestiny]
+   partitions=4/4 size=920B
+====
+# Self-join of with-clause table to make sure the using clause is properly set
+# in the cloned inline-view instances.
+with t as (select int_col x, bigint_col y from functional.alltypestiny)
+select * from t t1 inner join t t2 using(x) inner join t t3 using(x)
+---- PLAN
+04:HASH JOIN [INNER JOIN]
+|  hash predicates: int_col = int_col
+|
+|--02:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B compact
+|
+03:HASH JOIN [INNER JOIN]
+|  hash predicates: int_col = int_col
+|
+|--01:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B compact
+|
+00:SCAN HDFS [functional.alltypestiny]
+   partitions=4/4 size=920B
+---- DISTRIBUTEDPLAN
+08:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+04:HASH JOIN [INNER JOIN, PARTITIONED]
+|  hash predicates: int_col = int_col
+|
+|--07:EXCHANGE [PARTITION=HASH(int_col)]
+|  |
+|  02:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B
+|
+03:HASH JOIN [INNER JOIN, PARTITIONED]
+|  hash predicates: int_col = int_col
+|
+|--06:EXCHANGE [PARTITION=HASH(int_col)]
+|  |
+|  01:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B
+|
+05:EXCHANGE [PARTITION=HASH(int_col)]
+|
+00:SCAN HDFS [functional.alltypestiny]
+   partitions=4/4 size=920B
+====
+# Self-join of with-clause table to make sure the join op is properly set
+# in the cloned inline-view instances.
+with t as (select int_col x, bigint_col y from functional.alltypestiny)
+select * from t t1 left outer join t t2 using(x) full outer join t t3 using(x)
+---- PLAN
+04:HASH JOIN [FULL OUTER JOIN]
+|  hash predicates: int_col = int_col
+|
+|--02:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B compact
+|
+03:HASH JOIN [LEFT OUTER JOIN]
+|  hash predicates: int_col = int_col
+|
+|--01:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B compact
+|
+00:SCAN HDFS [functional.alltypestiny]
+   partitions=4/4 size=920B
+---- DISTRIBUTEDPLAN
+08:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+04:HASH JOIN [FULL OUTER JOIN, PARTITIONED]
+|  hash predicates: int_col = int_col
+|
+|--07:EXCHANGE [PARTITION=HASH(int_col)]
+|  |
+|  02:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B
+|
+03:HASH JOIN [LEFT OUTER JOIN, PARTITIONED]
+|  hash predicates: int_col = int_col
+|
+|--06:EXCHANGE [PARTITION=HASH(int_col)]
+|  |
+|  01:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B
+|
+05:EXCHANGE [PARTITION=HASH(int_col)]
+|
+00:SCAN HDFS [functional.alltypestiny]
+   partitions=4/4 size=920B
+====
+# Self-join of with-clause table to make sure join hints are properly set
+# in the cloned inline-view instances.
+# Note that in the plan above without hints the first join uses shuffle
+# and the second broadcast.
+with t as (select int_col x, bigint_col y from functional.alltypestiny)
+select * from t t1 inner join [broadcast] t t2 using(x) inner join [shuffle] t t3 using(x)
+---- PLAN
+04:HASH JOIN [INNER JOIN]
+|  hash predicates: int_col = int_col
+|
+|--02:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B compact
+|
+03:HASH JOIN [INNER JOIN]
+|  hash predicates: int_col = int_col
+|
+|--01:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B compact
+|
+00:SCAN HDFS [functional.alltypestiny]
+   partitions=4/4 size=920B
+---- DISTRIBUTEDPLAN
+08:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+04:HASH JOIN [INNER JOIN, PARTITIONED]
+|  hash predicates: int_col = int_col
+|
+|--07:EXCHANGE [PARTITION=HASH(int_col)]
+|  |
+|  02:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B
+|
+06:EXCHANGE [PARTITION=HASH(int_col)]
+|
+03:HASH JOIN [INNER JOIN, BROADCAST]
+|  hash predicates: int_col = int_col
+|
+|--05:EXCHANGE [BROADCAST]
+|  |
+|  01:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=920B
+|
+00:SCAN HDFS [functional.alltypestiny]
+   partitions=4/4 size=920B
+====
+# Multiple with clauses. One for the UnionStmt and one for each union operand.
+with t1 as (values('a', 'b'))
+(with t2 as (values('c', 'd')) select * from t2) union all
+(with t3 as (values('e', 'f')) select * from t3) order by 1 limit 1
+---- PLAN
+03:TOP-N [LIMIT=1]
+|  order by: 'c' ASC
+|
+00:MERGE
+|
+|--02:MERGE
+|     constant-selects=1
+|
+01:MERGE
+   constant-selects=1
+---- DISTRIBUTEDPLAN
+03:TOP-N [LIMIT=1]
+|  order by: 'c' ASC
+|
+04:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+|--06:MERGE
+|  |
+|  02:MERGE
+|     constant-selects=1
+|
+05:MERGE
+|
+01:MERGE
+   constant-selects=1
+====
+# Multiple with clauses. One for the UnionStmt and one for each union operand.
+with t1 as (values('a', 'b'))
+(with t2 as (values('c', 'd')) select * from t2) union all
+(with t3 as (values('e', 'f')) select * from t3) order by 1 limit 1
+---- PLAN
+03:TOP-N [LIMIT=1]
+|  order by: 'c' ASC
+|
+00:MERGE
+|
+|--02:MERGE
+|     constant-selects=1
+|
+01:MERGE
+   constant-selects=1
+---- DISTRIBUTEDPLAN
+03:TOP-N [LIMIT=1]
+|  order by: 'c' ASC
+|
+04:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+|--06:MERGE
+|  |
+|  02:MERGE
+|     constant-selects=1
+|
+05:MERGE
+|
+01:MERGE
+   constant-selects=1
+====
+# Test with clause in an insert statement.
+with t1 as (select * from functional.alltypestiny)
+insert into functional.alltypesinsert partition(year, month) select * from t1
+---- PLAN
+WRITE TO HDFS [functional.alltypesinsert, OVERWRITE=false, PARTITION-KEYS=(functional.alltypestiny.year,functional.alltypestiny.month)]
+|  partitions=4
+|
+00:SCAN HDFS [functional.alltypestiny]
+   partitions=4/4 size=1.35KB
+---- DISTRIBUTEDPLAN
+WRITE TO HDFS [functional.alltypesinsert, OVERWRITE=false, PARTITION-KEYS=(functional.alltypestiny.year,functional.alltypestiny.month)]
+|  partitions=4
+|
+01:EXCHANGE [PARTITION=HASH(functional.alltypestiny.year,functional.alltypestiny.month)]
+|
+00:SCAN HDFS [functional.alltypestiny]
+   partitions=4/4 size=1.35KB
+====
+# Test with clause in an insert statement and in its query statement.
+with t1 as (select * from functional.alltypestiny)
+insert into functional.alltypesinsert partition(year, month)
+with t2 as (select * from functional.alltypestiny)
+select * from t1 union all select * from t2
+---- PLAN
+WRITE TO HDFS [functional.alltypesinsert, OVERWRITE=false, PARTITION-KEYS=(year,month)]
+|  partitions=16
+|
+00:MERGE
+|
+|--02:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=1.35KB
+|
+01:SCAN HDFS [functional.alltypestiny]
+   partitions=4/4 size=1.35KB
+---- DISTRIBUTEDPLAN
+WRITE TO HDFS [functional.alltypesinsert, OVERWRITE=false, PARTITION-KEYS=(year,month)]
+|  partitions=16
+|
+03:EXCHANGE [PARTITION=UNPARTITIONED]
+|
+|--05:MERGE
+|  |
+|  02:SCAN HDFS [functional.alltypestiny]
+|     partitions=4/4 size=1.35KB
+|
+04:MERGE
+|
+01:SCAN HDFS [functional.alltypestiny]
+   partitions=4/4 size=1.35KB
+====
