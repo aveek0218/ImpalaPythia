@@ -1,0 +1,24 @@
+Cloudera Impala is a Massively Parallel Processing (MPP) distributed query engine within the Cloudera Hadoop ecosystem that directly accesses the data in Hadoop Distributed File System (HDFS) rather than accessing it via MapReduce. Impala is optimized for low-latency queries, typically many times faster than Hive queries. However, with the advent of modern multi-core processors with large main memories it is possible to fit entire datasets in memory, but Impala in its current state can only query the data stored in disk. Also most of the execution on a single node is sequential and parallelism is mostly exhibited only across nodes. In this project we attempt to parallelise Impala's query execution within a node and also enable it to read data from shared memory, by integrating it with Pythia[1] which is a parallel, pipelined, open-source query execution engine optimized for multi-socket, multi-core systems with large main memories
+
+Implementation Details:
+
+In order to integrate Impala with Pythia we have created an alternative 
+flow inside Impala (Figure 2) which can be easily triggered by a new keyword in-troduced by us. We changed the Impala parser to add a new identier called 'Magic' which would be akin to an existing 'Select' identifier, the only difference being that for this new identier a dierent query plan would be generated, that tells the BackEnd coordinator to invoke the Pythia[1] query engine. As a result, when a user runs a query of the form "MAGIC SELECT * FROM TABLE;".
+
+the back end is easily able to identify that this query needs to be handled separately by Pythia, and not by Impala. We implemented a new execution node (operator) in the back end named PythiaReaderNode, which acts as an integration point for the two query engines. The PythiaReaderNode invokes the Pythia query engine which then executes the query and returns the result back to the node which are then sent back to the client. In order to enable the new execution node to invoke Pythia we merged the codebases of the two query engines.
+
+The modications in the FrontEnd codebase can be summarized as follows:
+1. Modications to the Scanner and Parser logic:
+   A new keyword, named `MAGIC' was added in the Flex file.
+   New grammar rules are added to the CUP parser file, to parse the queries pertaining to the 'MAGIC' keyword.
+2. Addition of a new type of QueryStmt called as MagicStmt, which extends and behaves exactly like a SelectStmt, except that it may contain additional arguments that the user may pass in (such as pythia cong le).
+3. Addition of a new type of ScanNode called as MagicNode, which behaves like a HdfsScanNode, but with a dierent name, which the back end can identify.
+4. Changes in thrift structures to incorporate the addition of Magic operator.
+5. Addition of methods in Planner, to create a Magic Plan Fragment.
+
+The modications in the BackEnd codebase can be summarized as follows:
+1. Creation of the execution node named PythiaReaderNode which is a sub-class of ExecNode. This node implements the Prepare, Open, GetNext and Close methods of the ExecNode. It invokes the Pythia query engine in the Open method and returns the results produced by Pythia through the GetNext method.
+2. Addition of a switch case in ExecNode::CreateNode function in order to create the PythiaReaderNode for MagicStmt
+3. Changes in the CMakeLists.txt in Impala/be to include Pythia specific libraries.
+4. Changes in the CMakeLists.txt in Impala/be/src/exec to compile the Pythia codebase.
+
